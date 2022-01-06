@@ -27,7 +27,7 @@ type (
 		publisher       *PublisherMock
 		observer1       *ObserverMock
 		observer2       *ObserverMock
-		observerManager *Manager
+		observerManager ObserverManager
 	}
 )
 
@@ -144,9 +144,6 @@ func (suite *ObserverManagerTestSuite) TestGetObservers() {
 
 	suite.Require().Contains(suite.observerManager.GetObservers(), suite.observer1)
 	suite.Require().Contains(suite.observerManager.GetObservers(), suite.observer2)
-}
-
-func (suite *ObserverManagerTestSuite) TestGetObserver() {
 }
 
 func TestObserverManager(t *testing.T) {

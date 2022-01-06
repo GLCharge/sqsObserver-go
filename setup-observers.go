@@ -2,8 +2,8 @@ package sqsObserver_go
 
 import (
 	"context"
-	"errors"
-	"github.com/GLCharge/sqsObserver-go/configuration"
+	"fmt"
+	"github.com/GLCharge/sqsObserver-go/models/configuration"
 	"github.com/GLCharge/sqsObserver-go/models/messages"
 	"github.com/GLCharge/sqsObserver-go/sqs"
 	"github.com/aws/aws-sdk-go/aws/session"
@@ -21,17 +21,13 @@ func StartDefaultPublisher(ctx context.Context, session *session.Session) {
 
 // LaunchObservers creates observers based on the provided configuration.
 // It launches each observer in a new goroutine. If any of the observers fail to configure, returns an error.
-func LaunchObservers(ctx context.Context, session *session.Session, sqsConfiguration *configuration.SQS) error {
-	log.Info("Creating SQS observers from configuration")
-
-	if sqsConfiguration == nil {
-		return errors.New("configuration cannot be nil")
-	}
+func LaunchObservers(ctx context.Context, session *session.Session, sqsConfiguration configuration.SQS) error {
+	log.Debugf("Creating SQS observers from configuration")
 
 	manager := GetObserverManager()
 
 	// Create a default observer
-	observerChannel := make(chan messages.ApiMessage, 30)
+	observerChannel := make(chan messages.ApiMessage, len(sqsConfiguration.Queues)*3)
 	defaultObserver := NewMultipleQueueObserverWithChannel(session, observerChannel)
 	defaultObserver.SetPollDuration(sqsConfiguration.PollDuration)
 	manager.SetDefaultObserver(defaultObserver)
@@ -41,8 +37,7 @@ func LaunchObservers(ctx context.Context, session *session.Session, sqsConfigura
 
 		qOut, err := sqs.GetQueueURLFromSession(session, queue.QueueName)
 		if err != nil || qOut.QueueUrl == nil {
-			log.Errorf("Cannot get URL for queue %s: %v", queue.QueueName, err)
-			return err
+			return fmt.Errorf("cannot get URL for queue %s: %v", queue.QueueName, err)
 		}
 
 		queueName = qOut.QueueUrl
@@ -54,7 +49,7 @@ func LaunchObservers(ctx context.Context, session *session.Session, sqsConfigura
 		}
 
 		if manager.HasObserverWithTag(queue.Tag) {
-			log.Debugf("Observer with the tag %s already exists, adding queue to the observer: %v", queue.Tag, *queueName)
+			log.Tracef("Observer with the tag %s already exists, adding queue to the observer: %v", queue.Tag, *queueName)
 
 			// Add the queue to the observer with tag
 			mObserver := manager.GetMultipleObserver(queue.Tag)

@@ -23,10 +23,13 @@ const (
 	Reset                    = MessageType("Reset")
 	ChangeConfiguration      = MessageType("ChangeConfiguration")
 	ChangeAvailability       = MessageType("ChangeAvailability")
+	GetConfiguration         = MessageType("GetConfiguration")
 	DataTransfer             = MessageType("DataTransfer")
-	ClearCache               = MessageType("ClearCache")
 	SetChargingProfile       = MessageType("SetChargingProfile")
 	ClearChargingProfile     = MessageType("ClearChargingProfile")
+
+	StatusProcessed = "Processed"
+	StatusError     = "Error"
 )
 
 var (
@@ -43,9 +46,9 @@ type (
 		MessageType     MessageType             `json:"messageType" validate:"required,isSupportedMessageType"`
 		Timestamp       *time.Time              `json:"timestamp,omitempty"`
 		ProtocolVersion version.ProtocolVersion `json:"protocolVersion" validate:"isSupportedProtocol"`
-		//Error           string                 `json:"error"`
-		// All payload structs should go in the data attribute
-		Data interface{} `json:"data,omitempty"`
+		Status          string                  `json:"status,omitempty"`
+		Errors          []string                `json:"errors,omitempty"`
+		Data            interface{}             `json:"data,omitempty"`
 	}
 )
 

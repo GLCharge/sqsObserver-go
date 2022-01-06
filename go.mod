@@ -2,12 +2,6 @@ module github.com/GLCharge/sqsObserver-go
 
 go 1.17
 
-replace (
-	github.com/GLCharge/sqsObserver-go/configuration => ./configuration
-	github.com/GLCharge/sqsObserver-go/models/messages => ./models/messages
-	github.com/GLCharge/sqsObserver-go/models/version => ./models/version
-)
-
 require (
 	github.com/aws/aws-sdk-go v1.42.25
 	github.com/cenkalti/backoff/v4 v4.1.2

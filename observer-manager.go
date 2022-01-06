@@ -7,7 +7,7 @@ import (
 )
 
 var (
-	manager *Manager
+	manager ObserverManager
 	once    = sync.Once{}
 )
 
@@ -49,7 +49,7 @@ func createManager() {
 	})
 }
 
-func GetObserverManager() *Manager {
+func GetObserverManager() ObserverManager {
 	if manager == nil {
 		createManager()
 	}

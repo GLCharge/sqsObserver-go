@@ -3,7 +3,7 @@ package sqsObserver_go
 import (
 	"context"
 	"encoding/json"
-	"github.com/GLCharge/sqsObserver-go/configuration"
+	"github.com/GLCharge/sqsObserver-go/models/configuration"
 	"github.com/GLCharge/sqsObserver-go/models/messages"
 	"github.com/GLCharge/sqsObserver-go/sqs"
 	"github.com/aws/aws-sdk-go/aws/session"

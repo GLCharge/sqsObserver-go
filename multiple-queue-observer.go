@@ -168,7 +168,6 @@ func (mqo *MultipleQueueObserver) sendMessageToChannel(queueUrl string, message 
 		log.Debugf("Sending message to channel: %v", *messageBody)
 		mqo.channel <- sqsMessage
 
-		// todo potential issue while scaling services
 		err = sqs.DeleteMessage(mqo.svc, &queueUrl, message.ReceiptHandle)
 		if err != nil {
 			log.Warnf("Couldn't delete the message from queue: %v", err)
