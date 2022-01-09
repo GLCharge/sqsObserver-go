@@ -26,7 +26,7 @@ type (
 
 	MultipleObserver interface {
 		Observer
-		AddQueuesToObserve(queueNames ...string)
+		AddQueuesToObserve(queueNames ...string) error
 		SetPollDuration(pollDuration int64)
 		SetTimeout(timeout int64)
 	}

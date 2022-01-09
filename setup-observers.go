@@ -2,10 +2,8 @@ package sqsObserver_go
 
 import (
 	"context"
-	"fmt"
 	"github.com/GLCharge/sqsObserver-go/models/configuration"
 	"github.com/GLCharge/sqsObserver-go/models/messages"
-	"github.com/GLCharge/sqsObserver-go/sqs"
 	"github.com/aws/aws-sdk-go/aws/session"
 	log "github.com/sirupsen/logrus"
 )
@@ -19,8 +17,9 @@ func StartDefaultPublisher(ctx context.Context, session *session.Session) {
 	manager.PublisherListen(ctx)
 }
 
-// LaunchObservers creates observers based on the provided configuration.
-// It launches each observer in a new goroutine. If any of the observers fail to configure, returns an error.
+// LaunchObservers Create observers based on the provided configuration.
+// It launches each observer in a new goroutine with a common channel. Returns an error if any of the observers
+// is unable to configure properly.
 func LaunchObservers(ctx context.Context, session *session.Session, sqsConfiguration configuration.SQS) error {
 	log.Debugf("Creating SQS observers from configuration")
 
@@ -33,28 +32,31 @@ func LaunchObservers(ctx context.Context, session *session.Session, sqsConfigura
 	manager.SetDefaultObserver(defaultObserver)
 
 	for _, queue := range sqsConfiguration.Queues {
-		var queueName *string
-
-		qOut, err := sqs.GetQueueURLFromSession(session, queue.QueueName)
-		if err != nil || qOut.QueueUrl == nil {
-			return fmt.Errorf("cannot get URL for queue %s: %v", queue.QueueName, err)
-		}
-
-		queueName = qOut.QueueUrl
+		var (
+			queueName = queue.QueueName
+			err       error
+		)
 
 		// If the tag is empty, add the queue to the default observer
 		if queue.Tag == "" {
-			defaultObserver.AddQueuesToObserve(*queueName)
+			err = defaultObserver.AddQueuesToObserve(queueName)
+			if err != nil {
+				return err
+			}
+
 			continue
 		}
 
 		if manager.HasObserverWithTag(queue.Tag) {
-			log.Tracef("Observer with the tag %s already exists, adding queue to the observer: %v", queue.Tag, *queueName)
+			log.Tracef("Observer with the tag %s already exists, adding queue to the observer: %v", queue.Tag, queueName)
 
 			// Add the queue to the observer with tag
 			mObserver := manager.GetMultipleObserver(queue.Tag)
 			if mObserver != nil {
-				mObserver.AddQueuesToObserve(*queueName)
+				err = mObserver.AddQueuesToObserve(queueName)
+				if err != nil {
+					return err
+				}
 			}
 
 		} else {
@@ -62,7 +64,12 @@ func LaunchObservers(ctx context.Context, session *session.Session, sqsConfigura
 			newObserver := NewMultipleQueueObserverWithChannel(session, observerChannel)
 			newObserver.SetPollDuration(sqsConfiguration.PollDuration)
 			newObserver.SetTimeout(1)
-			newObserver.AddQueuesToObserve(*queueName)
+			// Add queue to observer
+			err = newObserver.AddQueuesToObserve(queueName)
+			if err != nil {
+				return err
+			}
+
 			manager.AddObserver(queue.Tag, newObserver)
 		}
 	}

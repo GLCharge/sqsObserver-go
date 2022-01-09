@@ -3,6 +3,7 @@ package sqsObserver_go
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"github.com/GLCharge/sqsObserver-go/models/messages"
 	"github.com/GLCharge/sqsObserver-go/sqs"
 	"github.com/aws/aws-sdk-go/aws/session"
@@ -126,22 +127,26 @@ Loop:
 	}
 }
 
-func (mqo *MultipleQueueObserver) AddQueuesToObserve(queueNames ...string) {
+func (mqo *MultipleQueueObserver) AddQueuesToObserve(queueNames ...string) error {
 	log.WithField("queues", queueNames).Debug("Adding queues to observe")
 
-	if queueNames != nil {
-		// Get urls for the queues
-		for _, queueName := range queueNames {
-			url, err := sqs.GetQueueURL(mqo.svc, queueName)
-			if err != nil {
-				continue
-			}
+	if queueNames == nil {
+		return errors.New("no queues to add")
+	}
 
-			if url != nil {
-				mqo.queues.Store(queueName, *url.QueueUrl)
-			}
+	// Get urls for the queues
+	for _, queueName := range queueNames {
+		url, err := sqs.GetQueueURL(mqo.svc, queueName)
+		if err != nil {
+			return err
+		}
+
+		if url != nil {
+			mqo.queues.Store(queueName, *url.QueueUrl)
 		}
 	}
+
+	return nil
 }
 
 func (mqo *MultipleQueueObserver) SetPollDuration(pollDuration int64) {
