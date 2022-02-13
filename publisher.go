@@ -17,6 +17,7 @@ type (
 		Send(queue string, message messages.ApiMessage) error
 		Listen(ctx context.Context)
 		GetProducerChannel() chan<- PublisherMessage
+		SetLogger(logger *log.Logger)
 	}
 
 	SqsPublisher struct {
@@ -24,6 +25,7 @@ type (
 		producerChan chan PublisherMessage
 		queueUrls    sync.Map
 		svc          *awsSqs.SQS
+		logger       *log.Logger
 	}
 
 	PublisherMessage struct {
@@ -44,30 +46,38 @@ func NewSqsPublisher(session *session.Session) Publisher {
 		queueUrls:    sync.Map{},
 		once:         sync.Once{},
 		svc:          svc,
+		logger:       log.StandardLogger(),
 	}
 }
 
 // GetProducerChannel returns the QueueMessage channel
-func (b *SqsPublisher) GetProducerChannel() chan<- PublisherMessage {
-	return b.producerChan
+func (p *SqsPublisher) GetProducerChannel() chan<- PublisherMessage {
+	return p.producerChan
+}
+
+// SetLogger set a logger for this instance
+func (p *SqsPublisher) SetLogger(logger *log.Logger) {
+	if logger != nil {
+		p.logger = logger
+	}
 }
 
 // getQueueUrl check the publisher cache for queue URL based on the message type or create and cache the url.
-func (b *SqsPublisher) getQueueUrl(queueName string) (*string, error) {
+func (p *SqsPublisher) getQueueUrl(queueName string) (*string, error) {
 	var (
 		queueUrl           *string
-		cachedUrl, isFound = b.queueUrls.Load(queueName)
+		cachedUrl, isFound = p.queueUrls.Load(queueName)
 	)
 
 	if !isFound {
 		// If the url is not cached, get the URL from message type
-		out, err := sqs.GetQueueURL(b.svc, queueName)
+		out, err := sqs.GetQueueURL(p.svc, queueName)
 		if err != nil {
 			return nil, err
 		}
 
 		queueUrl = out.QueueUrl
-		b.queueUrls.Store(queueName, *queueUrl)
+		p.queueUrls.Store(queueName, *queueUrl)
 	} else {
 		url := cachedUrl.(string)
 		queueUrl = &url
@@ -77,42 +87,42 @@ func (b *SqsPublisher) getQueueUrl(queueName string) (*string, error) {
 }
 
 // Send a message to SQS.
-func (b *SqsPublisher) Send(queue string, message messages.ApiMessage) error {
-	log.Tracef("Sending message %v to queue %s", message, queue)
+func (p *SqsPublisher) Send(queue string, message messages.ApiMessage) error {
+	p.logger.Tracef("Sending message %v to queue %s", message, queue)
 
 	sMessage, err := json.Marshal(&message)
 	if err != nil {
 		return err
 	}
 
-	url, err := b.getQueueUrl(queue)
+	url, err := p.getQueueUrl(queue)
 	if err != nil {
 		return err
 	}
 
-	return sqs.SendMsg(b.svc, url, nil, string(sMessage))
+	return sqs.SendMsg(p.svc, url, nil, string(sMessage))
 }
 
 // Listen to all incoming messages from the channel and send them to the SQS.
-func (b *SqsPublisher) Listen(ctx context.Context) {
-	log.Debug("Publisher listening to channel")
-	b.once.Do(func() {
+func (p *SqsPublisher) Listen(ctx context.Context) {
+	p.logger.Debug("Publisher listening to channel")
+	p.once.Do(func() {
 
 	Listener:
 		for {
 			select {
 			// Listen to context
 			case <-ctx.Done():
-				log.Debug("Stopping the publisher..")
-				close(b.producerChan)
+				p.logger.Debug("Stopping the publisher..")
+				close(p.producerChan)
 				break Listener
 			// Listen to the channel
-			case messageFromChannel := <-b.producerChan:
-				log.Tracef("Publisher received a message from channel: %v", messageFromChannel)
+			case messageFromChannel := <-p.producerChan:
+				p.logger.Tracef("Publisher received a message from channel: %v", messageFromChannel)
 
-				err := b.Send(messageFromChannel.QueueName, messageFromChannel.Message)
+				err := p.Send(messageFromChannel.QueueName, messageFromChannel.Message)
 				if err != nil {
-					log.Errorf("Cannot send a message to SQS: %v", err)
+					p.logger.Errorf("Cannot send a message to SQS: %v", err)
 				}
 				break
 			}

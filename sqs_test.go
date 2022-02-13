@@ -5,6 +5,7 @@ import (
 	"github.com/GLCharge/sqsObserver-go/models/messages"
 	"github.com/GLCharge/sqsObserver-go/models/version"
 	"github.com/GLCharge/sqsObserver-go/sqs"
+	"github.com/aws/aws-sdk-go/aws"
 	awsSqs "github.com/aws/aws-sdk-go/service/sqs"
 	log "github.com/sirupsen/logrus"
 	assert2 "github.com/stretchr/testify/assert"
@@ -16,6 +17,7 @@ import (
 var (
 	queueName  = "HeartbeatQueue"
 	queue2Name = "ExampleQueue"
+	queue3Name = "Example1Queue"
 	stack      *Localstack
 )
 
@@ -24,7 +26,10 @@ type sqsTestSuite struct {
 }
 
 func (s *sqsTestSuite) SetupTest() {
-
+	var svc = awsSqs.New(stack.sess)
+	// Create queues
+	err := createQueues(svc, queueName, queue2Name, queue3Name)
+	s.Assert().NoError(err)
 }
 
 func createQueues(svc *awsSqs.SQS, queues ...string) error {
@@ -39,36 +44,41 @@ func createQueues(svc *awsSqs.SQS, queues ...string) error {
 }
 
 func (s *sqsTestSuite) TestPublisherAndSingleObserver() {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
+	var (
+		ctx, cancel = context.WithTimeout(context.Background(), time.Minute)
+		// Create a new observer
+		testObserver = NewSqsSingleObserver(stack.sess, queue3Name, 3)
+		// Create a new publisher
+		pb = NewSqsPublisher(stack.sess)
+	)
 
-	svc := awsSqs.New(stack.sess)
+	// Observe the queue
+	go func() {
+		err := testObserver.Start(ctx)
+		s.Assert().NoError(err)
+	}()
 
-	// Create queues
-	err := createQueues(svc, queueName)
-	s.Assert().NoError(err)
-
-	// Create a new observer
-	testObserver := NewSqsSingleObserver(stack.sess, queueName, 3)
-	go testObserver.Start(ctx)
-
-	// Create a new publisher
-	pb := NewSqsPublisher(stack.sess)
+	// Publisher listens to the channel
 	go pb.Listen(ctx)
 
-	currentTime := time.Now()
-	exampleMessage := messages.ApiMessage{
-		MessageId:       "uuid",
-		MessageType:     messages.Heartbeat,
-		Timestamp:       &currentTime,
-		ProtocolVersion: version.ProtocolVersion16,
-		Data:            "exampleData",
-	}
+	var (
+		currentTime    = time.Now()
+		exampleMessage = messages.ApiMessage{
+			MessageId:       "uuid",
+			MessageType:     messages.SetChargingProfile,
+			Timestamp:       &currentTime,
+			ProtocolVersion: version.ProtocolVersion16,
+			Data:            "exampleData",
+		}
+		ch         = pb.GetProducerChannel()
+		consumerCh = testObserver.GetConsumerChannel()
+	)
 
 	// Send a message to the queue
 	go func() {
-		time.Sleep(1 * time.Second)
-		pb.GetProducerChannel() <- PublisherMessage{
-			QueueName: queueName,
+		time.Sleep(3 * time.Second)
+		ch <- PublisherMessage{
+			QueueName: queue3Name,
 			Message:   exampleMessage,
 		}
 	}()
@@ -79,7 +89,7 @@ Loop:
 		case <-ctx.Done():
 			cancel()
 			break Loop
-		case msg := <-testObserver.GetConsumerChannel():
+		case msg := <-consumerCh:
 			// The message should be received
 			log.Infof("Received message: %v", msg)
 			s.Assert().Equal(exampleMessage.MessageId, msg.MessageId)
@@ -93,48 +103,58 @@ Loop:
 }
 
 func (s *sqsTestSuite) TestMultipleObserver() {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
+	var (
+		ctx, cancel = context.WithTimeout(context.Background(), time.Minute)
+		svc         = awsSqs.New(stack.sess)
+		err         error
+		// Create a new observer
+		testObserver = NewMultipleQueueObserver(stack.sess)
+		// Create a new publisher
+		pb = NewSqsPublisher(stack.sess)
+	)
 
-	svc := awsSqs.New(stack.sess)
+	q1 := CreateQueue(svc, queueName, aws.Int64(2), nil)
+	q2 := CreateQueue(svc, queue2Name, aws.Int64(2), nil)
+	s.Require().NotNil(q1)
+	s.Require().NotNil(q2)
 
-	err := createQueues(svc, queueName, queue2Name)
-	s.Assert().NoError(err)
+	err = testObserver.AddQueuesToObserve(*q1, *q2)
+	s.Require().NoError(err)
 
-	// Create a new observer
-	testObserver := NewMultipleQueueObserver(stack.sess)
-	testObserver.AddQueuesToObserve(queueName, queue2Name)
-	go testObserver.Start(ctx)
+	go func() {
+		err := testObserver.Start(ctx)
+		s.Assert().NoError(err)
+	}()
 
-	currentTime := time.Now()
-	exampleMessage := messages.ApiMessage{
-		MessageId:       "uuid1",
-		MessageType:     messages.Heartbeat,
-		Timestamp:       &currentTime,
-		ProtocolVersion: version.ProtocolVersion16,
-		Data:            "exampleData",
-	}
+	var (
+		currentTime    = time.Now()
+		exampleMessage = messages.ApiMessage{
+			MessageId:       "uuid1",
+			MessageType:     messages.Heartbeat,
+			Timestamp:       &currentTime,
+			ProtocolVersion: version.ProtocolVersion16,
+			Data:            "exampleData",
+		}
+		exampleMessage2 = messages.ApiMessage{
+			MessageId:       "uuid2",
+			MessageType:     messages.AuthTag,
+			Timestamp:       &currentTime,
+			ProtocolVersion: version.ProtocolVersion16,
+			Data:            "exampleData2",
+		}
+	)
 
-	exampleMessage2 := messages.ApiMessage{
-		MessageId:       "uuid2",
-		MessageType:     messages.AuthTag,
-		Timestamp:       &currentTime,
-		ProtocolVersion: version.ProtocolVersion16,
-		Data:            "exampleData2",
-	}
-
-	// Create a new publisher
-	pb := NewSqsPublisher(stack.sess)
 	go pb.Listen(ctx)
 
 	// Send a message to the queue
 	go func() {
-		time.Sleep(1 * time.Second)
+		time.Sleep(3 * time.Second)
 		pb.GetProducerChannel() <- PublisherMessage{
 			QueueName: queueName,
 			Message:   exampleMessage,
 		}
 
-		time.Sleep(1 * time.Second)
+		time.Sleep(3 * time.Second)
 		pb.GetProducerChannel() <- PublisherMessage{
 			QueueName: queue2Name,
 			Message:   exampleMessage2,
@@ -163,7 +183,7 @@ Loop:
 				cancel()
 				break
 			default:
-				s.FailNow("Not supported message")
+				s.FailNow("Not a supported message")
 				cancel()
 			}
 			break

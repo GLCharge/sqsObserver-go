@@ -5,7 +5,6 @@ import (
 	"github.com/GLCharge/sqsObserver-go/models/configuration"
 	"github.com/GLCharge/sqsObserver-go/models/messages"
 	"github.com/GLCharge/sqsObserver-go/models/version"
-	awsSqs "github.com/aws/aws-sdk-go/service/sqs"
 	log "github.com/sirupsen/logrus"
 	"time"
 )
@@ -27,48 +26,54 @@ var sqsConfiguration = configuration.SQS{
 
 func (s *sqsTestSuite) TestObserversFromConfig() {
 	log.SetLevel(log.TraceLevel)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
-
-	svc := awsSqs.New(stack.sess)
-
-	err := createQueues(svc, queueName, queue2Name)
-	s.Assert().NoError(err)
+	var (
+		ctx, cancel = context.WithTimeout(context.Background(), time.Second*30)
+		err         error
+	)
 
 	// Launch observers from configuration
 	err = LaunchObservers(ctx, stack.sess, sqsConfiguration)
 	s.Assert().NoError(err)
 
-	currentTime := time.Now()
-	exampleMessage := messages.ApiMessage{
-		MessageId:       "uuid1",
-		MessageType:     messages.Heartbeat,
-		Timestamp:       &currentTime,
-		ProtocolVersion: version.ProtocolVersion16,
-		Data:            "exampleData",
-	}
+	var (
+		currentTime    = time.Now()
+		exampleMessage = messages.ApiMessage{
+			MessageId:       "uuid3",
+			MessageType:     messages.Heartbeat,
+			Timestamp:       &currentTime,
+			ProtocolVersion: version.ProtocolVersion16,
+			Data:            "exampleData",
+		}
 
-	exampleMessage2 := messages.ApiMessage{
-		MessageId:       "uuid2",
-		MessageType:     messages.AuthTag,
-		Timestamp:       &currentTime,
-		ProtocolVersion: version.ProtocolVersion16,
-		Data:            "exampleData2",
-	}
+		exampleMessage2 = messages.ApiMessage{
+			MessageId:       "uuid4",
+			MessageType:     messages.AuthTag,
+			Timestamp:       &currentTime,
+			ProtocolVersion: version.ProtocolVersion16,
+			Data:            "exampleData2",
+		}
+	)
 
 	StartDefaultPublisher(ctx, stack.sess)
-	// Create a new publisher
-	pb := GetObserverManager().GetDefaultPublisher()
+
+	var (
+		// Get observer channel
+		observerChan = manager.GetDefaultObserver().GetConsumerChannel()
+		// Get the publisher
+		pb           = manager.GetDefaultPublisher()
+		producerChan = pb.GetProducerChannel()
+	)
 
 	// Send a message to the queue
 	go func() {
-		time.Sleep(1 * time.Second)
-		pb.GetProducerChannel() <- PublisherMessage{
+		time.Sleep(3 * time.Second)
+		producerChan <- PublisherMessage{
 			QueueName: queueName,
 			Message:   exampleMessage,
 		}
 
-		time.Sleep(1 * time.Second)
-		pb.GetProducerChannel() <- PublisherMessage{
+		time.Sleep(3 * time.Second)
+		producerChan <- PublisherMessage{
 			QueueName: queue2Name,
 			Message:   exampleMessage2,
 		}
@@ -80,7 +85,7 @@ Loop:
 		case <-ctx.Done():
 			cancel()
 			break Loop
-		case msg := <-manager.GetDefaultObserver().GetConsumerChannel():
+		case msg := <-observerChan:
 			// The message should be received
 			log.Infof("Received message: %v", msg)
 			switch msg.MessageType {

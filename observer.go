@@ -3,6 +3,7 @@ package sqsObserver_go
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"github.com/GLCharge/sqsObserver-go/models/configuration"
 	"github.com/GLCharge/sqsObserver-go/models/messages"
 	"github.com/GLCharge/sqsObserver-go/sqs"
@@ -16,8 +17,10 @@ import (
 type (
 	//Observer is an observer/consumer interface for the service API.
 	Observer interface {
-		Start(ctx context.Context)
+		Start(ctx context.Context) error
 		GetConsumerChannel() <-chan messages.ApiMessage
+		SetChannel(channel chan messages.ApiMessage)
+		SetLogger(logger *log.Logger)
 	}
 
 	SingleObserver interface {
@@ -26,30 +29,57 @@ type (
 
 	MultipleObserver interface {
 		Observer
-		AddQueuesToObserve(queueNames ...string) error
-		SetPollDuration(pollDuration int64)
-		SetTimeout(timeout int64)
+		AddQueuesToObserve(queues ...Queue) error
+		SetDefaultPollDuration(pollDuration int64)
+		SetDefaultTimeout(timeout int64)
+	}
+
+	Queue struct {
+		QueueName         string
+		QueueUrl          *string
+		PollDuration      *int64
+		VisibilityTimeout *int64
 	}
 
 	// SingleSQSObserver is a concrete implementation of QueueObserver.
 	SingleSQSObserver struct {
 		consumerChan     chan messages.ApiMessage
-		queueListenUrl   string
-		pollDuration     *int64
+		queue            Queue
 		receivedMessages sync.Map
 		svc              *awsSqs.SQS
+		logger           *log.Logger
 	}
 )
 
 // GetConsumerChannel returns the QueueMessage channel
-func (b *SingleSQSObserver) GetConsumerChannel() <-chan messages.ApiMessage {
-	return b.consumerChan
+func (o *SingleSQSObserver) GetConsumerChannel() <-chan messages.ApiMessage {
+	return o.consumerChan
+}
+
+// SetChannel returns the QueueMessage channel
+func (o *SingleSQSObserver) SetChannel(channel chan messages.ApiMessage) {
+	if channel != nil {
+		o.consumerChan = channel
+	}
+}
+
+// SetLogger sets the logger for this instance
+func (o *SingleSQSObserver) SetLogger(logger *log.Logger) {
+	if logger != nil {
+		o.logger = logger
+	}
 }
 
 // Start starts listening to the SQS for incoming messages as well as listening to the channel.
-func (b *SingleSQSObserver) Start(ctx context.Context) {
+func (o *SingleSQSObserver) Start(ctx context.Context) error {
+	if o.queue.QueueUrl == nil {
+		return errors.New("queue url must not be nil")
+	}
+
 	var (
-		timeout = int64(1)
+		queueUrl          = o.queue.QueueUrl
+		visibilityTimeout = o.queue.VisibilityTimeout
+		pollDuration      = o.queue.PollDuration
 	)
 
 Loop:
@@ -57,30 +87,33 @@ Loop:
 		select {
 		// Listen to context
 		case <-ctx.Done():
-			close(b.consumerChan)
-			log.Debug("Stopping queue observer..")
+			close(o.consumerChan)
+			o.logger.Debug("Stopping queue observer..")
 			break Loop
 		default:
 			// Poll the queue for messages
-			log.Tracef("Polling queue: %s", b.queueListenUrl)
-			qMessages, err := sqs.GetMessages(b.svc, b.queueListenUrl, &timeout, b.pollDuration)
+			o.logger.Tracef("Polling queue: %v", queueUrl)
+
+			qMessages, err := sqs.GetMessages(o.svc, *queueUrl, visibilityTimeout, pollDuration)
 			if err != nil {
-				log.Errorf("Cannot retrieve a message from SQS: %v", err)
-				continue
+				o.logger.WithError(err).Errorf("Cannot retrieve a message from SQS")
+				return err
 			}
 
 			if qMessages != nil {
 				for _, message := range qMessages.Messages {
-					b.sendMessageToChannel(message)
+					o.sendMessageToChannel(message)
 				}
 			}
 			time.Sleep(30 * time.Millisecond)
 		}
 	}
+
+	return nil
 }
 
 // sendMessageToChannel sends a message received from SQS to the channel.
-func (b *SingleSQSObserver) sendMessageToChannel(message *awsSqs.Message) {
+func (o *SingleSQSObserver) sendMessageToChannel(message *awsSqs.Message) {
 	var (
 		sqsMessage  messages.ApiMessage
 		messageBody = message.Body
@@ -89,19 +122,21 @@ func (b *SingleSQSObserver) sendMessageToChannel(message *awsSqs.Message) {
 	if messageBody != nil {
 		err := json.Unmarshal([]byte(*messageBody), &sqsMessage)
 		if err != nil {
-			log.Errorf("Error unmarshalling message: %v", err)
+			o.logger.Errorf("Error unmarshalling message: %v", err)
 			return
 		}
 
+		// Delete the message from queue
 		defer func(svc *awsSqs.SQS, queueURL *string, messageHandle *string) {
 			err := sqs.DeleteMessage(svc, queueURL, messageHandle)
 			if err != nil {
-				log.Warnf("Couldn't delete message: %v", err)
+				o.logger.Warnf("Couldn't delete message: %v", err)
 			}
-		}(b.svc, &b.queueListenUrl, message.ReceiptHandle)
+		}(o.svc, o.queue.QueueUrl, message.ReceiptHandle)
 
-		log.Tracef("Sending message %v to channel", sqsMessage)
-		b.consumerChan <- sqsMessage
+		// Send the message to the channel
+		o.logger.Tracef("Sending message %v to channel", sqsMessage)
+		o.consumerChan <- sqsMessage
 	}
 }
 
@@ -121,11 +156,18 @@ func NewSqsSingleObserverFromConfiguration(session *session.Session, queueConfig
 		return nil
 	}
 
+	visibilityTimeout := int64(0)
+
 	return &SingleSQSObserver{
-		consumerChan:   make(chan messages.ApiMessage, 10),
-		pollDuration:   &queueConfig.PollDuration,
-		queueListenUrl: *url.QueueUrl,
-		svc:            svc,
+		consumerChan: make(chan messages.ApiMessage, 10),
+		queue: Queue{
+			QueueName:         queueConfig.QueueName,
+			QueueUrl:          url.QueueUrl,
+			PollDuration:      &queueConfig.PollDuration,
+			VisibilityTimeout: &visibilityTimeout,
+		},
+		svc:    svc,
+		logger: log.StandardLogger(),
 	}
 }
 
@@ -145,10 +187,17 @@ func NewSqsSingleObserver(session *session.Session, queueName string, pollDurati
 		return nil
 	}
 
+	visibilityTimeout := int64(0)
+
 	return &SingleSQSObserver{
-		consumerChan:   make(chan messages.ApiMessage, 10),
-		pollDuration:   &pollDuration,
-		queueListenUrl: *url.QueueUrl,
-		svc:            svc,
+		consumerChan: make(chan messages.ApiMessage, 10),
+		queue: Queue{
+			QueueName:         queueName,
+			QueueUrl:          url.QueueUrl,
+			PollDuration:      &pollDuration,
+			VisibilityTimeout: &visibilityTimeout,
+		},
+		svc:    svc,
+		logger: log.StandardLogger(),
 	}
 }

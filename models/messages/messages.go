@@ -9,24 +9,27 @@ import (
 
 // MessageType constants
 const (
-	BootNotification         = MessageType("BootNotification")
-	DisconnectedNotification = MessageType("DisconnectedNotification")
-	StatusNotification       = MessageType("StatusNotification")
-	AuthTag                  = MessageType("TagAuthentication")
-	Heartbeat                = MessageType("Heartbeat")
-	StartTransaction         = MessageType("StartTransaction")
-	StopTransaction          = MessageType("StopTransaction")
-	RemoteStartTransaction   = MessageType("RemoteStartTransaction")
-	RemoteStopTransaction    = MessageType("RemoteStopTransaction")
-	MeterValue               = MessageType("MeterValue")
-	UnlockConnector          = MessageType("UnlockConnector")
-	Reset                    = MessageType("Reset")
-	ChangeConfiguration      = MessageType("ChangeConfiguration")
-	ChangeAvailability       = MessageType("ChangeAvailability")
-	GetConfiguration         = MessageType("GetConfiguration")
-	DataTransfer             = MessageType("DataTransfer")
-	SetChargingProfile       = MessageType("SetChargingProfile")
-	ClearChargingProfile     = MessageType("ClearChargingProfile")
+	BootNotification            = MessageType("BootNotification")
+	DisconnectedNotification    = MessageType("DisconnectedNotification")
+	StatusNotification          = MessageType("StatusNotification")
+	AuthTag                     = MessageType("TagAuthentication")
+	Heartbeat                   = MessageType("Heartbeat")
+	StartTransaction            = MessageType("StartTransaction")
+	StopTransaction             = MessageType("StopTransaction")
+	RemoteStartTransaction      = MessageType("RemoteStartTransaction")
+	RemoteStopTransaction       = MessageType("RemoteStopTransaction")
+	MeterValue                  = MessageType("MeterValue")
+	UnlockConnector             = MessageType("UnlockConnector")
+	Reset                       = MessageType("Reset")
+	ChangeConfiguration         = MessageType("ChangeConfiguration")
+	GetConfiguration            = MessageType("GetConfiguration")
+	ChangeAvailability          = MessageType("ChangeAvailability")
+	DataTransfer                = MessageType("DataTransfer")
+	SetChargingProfile          = MessageType("SetChargingProfile")
+	ClearChargingProfile        = MessageType("ClearChargingProfile")
+	TriggerMessage              = MessageType("TriggerMessage")
+	GetChargePointStatus        = MessageType("GetChargePointStatus")
+	GetStructureFromEnergyMeter = MessageType("GetStructureFromEnergyMeter")
 
 	StatusProcessed = "Processed"
 	StatusError     = "Error"
@@ -44,6 +47,9 @@ type (
 	ApiMessage struct {
 		MessageId       string                  `json:"messageId" validate:"required"`
 		MessageType     MessageType             `json:"messageType" validate:"required,isSupportedMessageType"`
+		TraceId         string                  `json:"traceId,omitempty"`
+		SpanId          string                  `json:"spanId,omitempty"`
+		ParentSpanId    string                  `json:"parentSpanId,omitempty"`
 		Timestamp       *time.Time              `json:"timestamp,omitempty"`
 		ProtocolVersion version.ProtocolVersion `json:"protocolVersion" validate:"isSupportedProtocol"`
 		Status          string                  `json:"status,omitempty"`

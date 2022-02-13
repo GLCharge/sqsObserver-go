@@ -13,6 +13,11 @@ import (
 	"time"
 )
 
+var (
+	ErrNoQueue          = errors.New("no queues provided")
+	ErrQueueDoesntExist = errors.New("queue does not exist")
+)
+
 type (
 	//MultipleQueueObserver is a concrete implementation of QueueObserver.
 	MultipleQueueObserver struct {
@@ -22,11 +27,12 @@ type (
 		queues              sync.Map
 		pollDurations       map[string]int64
 		svc                 *awsSqs.SQS
+		logger              *log.Logger
 	}
 )
 
 // NewMultipleQueueObserver creates a new observer with multiple queues.
-func NewMultipleQueueObserver(session *session.Session) *MultipleQueueObserver {
+func NewMultipleQueueObserver(session *session.Session) MultipleObserver {
 	// Create an SQS service client
 	mutex := sync.Mutex{}
 	mutex.Lock()
@@ -40,11 +46,12 @@ func NewMultipleQueueObserver(session *session.Session) *MultipleQueueObserver {
 		timeout:             1,
 		pollDurations:       make(map[string]int64),
 		svc:                 svc,
+		logger:              log.StandardLogger(),
 	}
 }
 
 // NewMultipleQueueObserverWithChannel creates a new observer with multiple queues with shared channel.
-func NewMultipleQueueObserverWithChannel(session *session.Session, messageChan chan messages.ApiMessage) *MultipleQueueObserver {
+func NewMultipleQueueObserverWithChannel(session *session.Session, messageChan chan messages.ApiMessage) MultipleObserver {
 	if messageChan == nil {
 		return nil
 	}
@@ -62,6 +69,7 @@ func NewMultipleQueueObserverWithChannel(session *session.Session, messageChan c
 		timeout:             1,
 		pollDurations:       make(map[string]int64),
 		svc:                 svc,
+		logger:              log.StandardLogger(),
 	}
 }
 
@@ -70,24 +78,30 @@ func (mqo *MultipleQueueObserver) GetConsumerChannel() <-chan messages.ApiMessag
 	return mqo.channel
 }
 
+// SetChannel returns the QueueMessage channel
+func (mqo *MultipleQueueObserver) SetChannel(channel chan messages.ApiMessage) {
+	if channel != nil {
+		mqo.channel = channel
+	}
+}
+
 //Start starts listening to the SQS for incoming messages as well as listening to the channel.
-func (mqo *MultipleQueueObserver) Start(ctx context.Context) {
+func (mqo *MultipleQueueObserver) Start(ctx context.Context) error {
 	var (
-		i         = 0
-		waitTime  = mqo.defaultPollDuration
-		queueUrls []string
+		i      = 0
+		queues []*Queue
 	)
 
 	mqo.queues.Range(func(key, value interface{}) bool {
-		queueUrls = append(queueUrls, value.(string))
+		queues = append(queues, value.(*Queue))
 		return true
 	})
 
-	log.Debugf("Started the observer with queues: %v", queueUrls)
+	mqo.logger.Debugf("Started the observer with queues: %v", queues)
 
-	if len(queueUrls) == 0 {
-		log.Debug("Observer listening to no queues, returning..")
-		return
+	if len(queues) == 0 {
+		mqo.logger.Debug("Observer listening to no queues, returning..")
+		return ErrNoQueue
 	}
 
 Loop:
@@ -95,28 +109,30 @@ Loop:
 		select {
 		// Listen to context
 		case <-ctx.Done():
-			log.Info("Stopping the multiple queue observer..")
+			mqo.logger.Info("Stopping the multiple queue observer..")
 			close(mqo.channel)
 			break Loop
 		default:
 			// Reset the queue index
-			if i > len(queueUrls)-1 {
+			if i > len(queues)-1 {
 				i = 0
 			}
 
-			if len(queueUrls) > 0 {
-				log.Tracef("Polling queue: %s", queueUrls[i])
+			if len(queues) > 0 {
+				queue := queues[i]
 
-				queueUrl := queueUrls[i]
-				qMessages, err := sqs.GetMessages(mqo.svc, queueUrl, &mqo.timeout, &waitTime)
+				mqo.logger.Tracef("Polling queue: %v", queue)
+
+				// Get the messages from SQS
+				qMessages, err := sqs.GetMessages(mqo.svc, *queue.QueueUrl, queue.VisibilityTimeout, queue.PollDuration)
 				if err != nil {
-					log.Errorf("Error getting messages: %v", err)
+					mqo.logger.Errorf("Error getting messages: %v", err)
 					continue
 				}
 
 				if qMessages != nil {
 					for _, message := range qMessages.Messages {
-						mqo.sendMessageToChannel(queueUrl, message)
+						mqo.sendMessageToChannel(*queue.QueueUrl, message)
 					}
 				}
 				i++
@@ -125,57 +141,66 @@ Loop:
 			time.Sleep(30 * time.Millisecond)
 		}
 	}
+
+	return nil
 }
 
-func (mqo *MultipleQueueObserver) AddQueuesToObserve(queueNames ...string) error {
-	log.WithField("queues", queueNames).Debug("Adding queues to observe")
+func (mqo *MultipleQueueObserver) AddQueuesToObserve(queues ...Queue) error {
+	mqo.logger.Debug("Adding queues to observe")
 
-	if queueNames == nil {
-		return errors.New("no queues to add")
+	if queues == nil {
+		return ErrNoQueue
 	}
 
-	// Get urls for the queues
-	for _, queueName := range queueNames {
-		url, err := sqs.GetQueueURL(mqo.svc, queueName)
-		if err != nil {
-			return err
+	for _, queue := range queues {
+		// Check if QueueUrl is not nil
+		if queue.QueueUrl != nil {
+			mqo.queues.Store(queue.QueueName, &queue)
+		} else {
+			return ErrQueueDoesntExist
 		}
 
-		if url != nil {
-			mqo.queues.Store(queueName, *url.QueueUrl)
-		}
 	}
 
 	return nil
 }
 
-func (mqo *MultipleQueueObserver) SetPollDuration(pollDuration int64) {
+func (mqo *MultipleQueueObserver) SetDefaultPollDuration(pollDuration int64) {
 	mqo.defaultPollDuration = pollDuration
 }
 
-func (mqo *MultipleQueueObserver) SetTimeout(timeout int64) {
+func (mqo *MultipleQueueObserver) SetDefaultTimeout(timeout int64) {
 	mqo.timeout = timeout
+}
+
+func (mqo *MultipleQueueObserver) SetLogger(logger *log.Logger) {
+	if logger != nil {
+		mqo.logger = logger
+	}
 }
 
 func (mqo *MultipleQueueObserver) sendMessageToChannel(queueUrl string, message *awsSqs.Message) {
 	var (
 		sqsMessage  messages.ApiMessage
 		messageBody = message.Body
+		err         error
 	)
 
-	if messageBody != nil {
-		err := json.Unmarshal([]byte(*messageBody), &sqsMessage)
+	defer func() {
+		err = sqs.DeleteMessage(mqo.svc, &queueUrl, message.ReceiptHandle)
 		if err != nil {
-			log.Errorf("Error unmarshalling message: %v", err)
+			mqo.logger.Warnf("Couldn't delete the message from queue: %v", err)
+		}
+	}()
+
+	if messageBody != nil {
+		err = json.Unmarshal([]byte(*messageBody), &sqsMessage)
+		if err != nil {
+			mqo.logger.Errorf("Error unmarshalling message: %v", err)
 			return
 		}
 
-		log.Debugf("Sending message to channel: %v", *messageBody)
+		mqo.logger.Debugf("Sending message to channel: %v", *messageBody)
 		mqo.channel <- sqsMessage
-
-		err = sqs.DeleteMessage(mqo.svc, &queueUrl, message.ReceiptHandle)
-		if err != nil {
-			log.Warnf("Couldn't delete the message from queue: %v", err)
-		}
 	}
 }
