@@ -92,7 +92,12 @@ func (qs *Manager) StartObservers(ctx context.Context) {
 	// Start the observers only once
 	qs.once.Do(func() {
 		if qs.defaultObserver != nil {
-			go qs.defaultObserver.Start(ctx)
+			go func() {
+				err := qs.defaultObserver.Start(ctx)
+				if err != nil {
+					log.WithError(err).Fatalf("Unable to start observer")
+				}
+			}()
 		}
 
 		// For each tag, get the associated observer and start it in a goroutine
@@ -100,7 +105,14 @@ func (qs *Manager) StartObservers(ctx context.Context) {
 
 			queue, isFound := qs.observers.Load(key)
 			if isFound && queue != nil {
-				go queue.(Observer).Start(ctx)
+
+				go func() {
+					err := queue.(Observer).Start(ctx)
+					if err != nil {
+						log.WithError(err).Fatalf("Unable to start observer")
+					}
+				}()
+
 				log.Tracef("Started observer with tag %s", key)
 			}
 

@@ -8,8 +8,9 @@ type (
 	}
 
 	Observer struct {
-		Tag          string `fig:"tag"`
-		QueueName    string `fig:"queueName" validation:"required"`
-		PollDuration int64  `fig:"pollDuration" validation:"gte=0"`
+		Tag            string `fig:"tag"`
+		QueueName      string `fig:"queueName" validation:"required"`
+		PollDuration   int64  `fig:"pollDuration" validation:"gte=0"`
+		MessageTimeout int64  `fig:"messageTimeout" default:"2"`
 	}
 )

@@ -4,6 +4,10 @@ This is an internal library used for observing (polling) SQS queues. OOP, easily
 
 Read the [configuration](docs/configuration.md) for queue configuration examples.
 
+Importing the library: 
+
+`go get github.com/GLCharge/sqsObserver-go`
+
 ## Possible improvements
 
 1. Worker pool and priority queues:
